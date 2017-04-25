@@ -6,18 +6,25 @@
 package com.github.spyhunter99.nugetparser;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.zip.GZIPInputStream;
+import org.apache.commons.io.FileUtils;
+import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHeaders;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -33,87 +40,112 @@ import org.json.JSONObject;
  *
  * @author AO
  */
-public class Main {
-
-    static Set<String> jsons = new HashSet<>();
-    static Set<String> packages = new HashSet<>();
+public class NugetCacher {
 
     public static void main(String[] args) throws Exception {
-        
+        //args = new String[]{"jquery"};
+        if (args == null || args.length == 0) {
+            System.out.println("java -jar NugetCacher-<VERSION>-jar (artifact)");
+            System.out.println("Example: java -jar NugetCacher-<VERSION>-jar jquery");
+            System.out.println("Example: java -jar NugetCacher-<VERSION>-jar audit.wcf");
+        } else {
+            new NugetCacher().run(args[0]);
+        }
+    }
+    LinkedHashSet<String> packages = new LinkedHashSet<>();
+    LinkedHashSet<String> jsons = new LinkedHashSet<>();
+    Set<String> urlsDownloadedThisSession = new HashSet<>();
+
+    private void run(String url) throws Exception {
+
         //TODO start with seed dependency. Package name must be toLower vs wha nuget has in the user interface
         //download and parse all json files
         //download all packages all versions
-        
-//packageContent registration parent         id
+        String seed = "https://api.nuget.org/v3/registration1-gz/" + url + "/index.json";
+        jsons.add(seed);
+
+        while (!jsons.isEmpty()) {
+            if (jsons.iterator().hasNext()) {
+                String jsonUrl = jsons.iterator().next();
+                if (!urlsDownloadedThisSession.contains(jsonUrl)) {
+                    downloadAndParse(jsonUrl);
+                    urlsDownloadedThisSession.add(jsonUrl);
+                }
+                jsons.remove(jsonUrl);
+            }
+        }
+        System.out.println("Downloading packages " + packages.size());
+        Iterator<String> iterator = packages.iterator();
+        while (iterator.hasNext()) {
+            download(iterator.next(), false);
+        }
+    }
+
+    private void downloadAndParse(String url) throws Exception {
+
+        System.out.println("Downloading JSON " + url);
+        URL urllocal = new URL(url);
+        String outputLocation = "output/" + urllocal.getPath();
+
+        File output = new File(outputLocation);
+        output.getParentFile().mkdirs();
 
         CloseableHttpClient client = HttpClients.custom()
                 .disableContentCompression()
                 .build();
 
-        HttpGet request = new HttpGet("http://nugetgallery.blob.core.windows.net/v3-registration1-gz/jquery/index.json");
-        //http://nugetgallery.blob.core.windows.net/v3-registration1-gz/jquery/index.json");
+        HttpGet request = new HttpGet(url);
         request.setHeader(HttpHeaders.ACCEPT_ENCODING, "gzip");
 
         CloseableHttpResponse response = client.execute(request);
         HttpEntity entity = response.getEntity();
-//        Header contentEncodingHeader = (Header) entity.getContentEncoding();
+
+        boolean isGzipped = false;
+        Header firstHeader = response.getFirstHeader(HttpHeaders.CONTENT_ENCODING);
+        if (firstHeader != null) {
+            if ("gzip".equalsIgnoreCase(firstHeader.getValue())) {
+                isGzipped = true;
+            }
+        } else {
+
+        }
         InputStream content = entity.getContent();
-        GZIPInputStream gzis = new GZIPInputStream(content);
-        //BufferedReader rd = new BufferedReader(new InputStreamReader(is, Charset.forName("UTF-8")));
-        BufferedReader rd = new BufferedReader(new InputStreamReader(gzis, Charset.forName("UTF-8")));
+        BufferedReader rd = null;
+        if (isGzipped) {
+            GZIPInputStream gzis = new GZIPInputStream(content);
+            rd = new BufferedReader(new InputStreamReader(gzis, Charset.forName("UTF-8")));
+        } else {
+
+            rd = new BufferedReader(new InputStreamReader(content, Charset.forName("UTF-8")));
+        }
+
         StringBuilder sb = new StringBuilder();
         int cp;
         while ((cp = rd.read()) != -1) {
             sb.append((char) cp);
         }
 
-        String output = sb.toString();// EntityUtils.toString(entity, Charset.forName("UTF-8").name());
+        content.close();
+        //gzis.close();
+        client.close();
 
-        JSONObject jsonObj = new JSONObject(output);//readJsonFromUrl("https://api.nuget.org/v3/registration1-gz/audit.wcf/index.json ");
+        String outputContent = sb.toString();
+        FileUtils.writeStringToFile(output, outputContent, "UTF-8");
+
+        System.out.println("Parsing JSON " + url);
+        JSONObject jsonObj = new JSONObject(outputContent);
 
         for (Object key : jsonObj.keySet()) {
-            //based on you key types
             String keyStr = (String) key;
             Object keyvalue = jsonObj.get(keyStr);
-
-            //Print key and value
-            // System.out.println("key: " + keyStr + " value: " + keyvalue);
             if ("items".equalsIgnoreCase(keyStr)) {
                 processItems(keyvalue);
-
             }
-
-            //JSONObject get = (JSONObject) jsonArray.get(0);
-            // JSONArray jsonArray1 = jsonArray.getJSONArray("items");
-            //System.out.println(jsonObj.toString());
         }
 
-        print(jsons);
-        print(packages);
     }
 
-    private static String readAll(Reader rd) throws IOException {
-        StringBuilder sb = new StringBuilder();
-        int cp;
-        while ((cp = rd.read()) != -1) {
-            sb.append((char) cp);
-        }
-        return sb.toString();
-    }
-
-    public static JSONObject readJsonFromUrl(String url) throws IOException, JSONException {
-        InputStream is = new URL(url).openStream();
-
-        //BufferedReader rd = new BufferedReader(new InputStreamReader(is, Charset.forName("UTF-8")));
-        BufferedReader rd = new BufferedReader(new InputStreamReader(new FileInputStream("../sample.json"), Charset.forName("UTF-8")));
-        String jsonText = readAll(rd);
-        // System.out.println(jsonText);
-        JSONObject json = new JSONObject(jsonText);
-        is.close();
-        return json;
-    }
-
-    private static void walkTree(JSONObject obj) {
+    private void walkTree(JSONObject obj) {
         if (obj.has("registration")) {
             System.out.println(obj.get("registration"));
         } else {
@@ -138,7 +170,7 @@ public class Main {
         }
     }
 
-    private static void processItems(Object keyvalue) {
+    private void processItems(Object keyvalue) {
 
         JSONArray array = (JSONArray) keyvalue;
         // System.out.println("items " + array.length());
@@ -213,7 +245,7 @@ public class Main {
                         //registration
                     }
 
-                } 
+                }
                 //Print key and value
                 // System.out.println("key: " + keyStr2 + " value: " + keyvalue2);
                 //for nested objects iteration if required
@@ -228,5 +260,66 @@ public class Main {
         while (iterator.hasNext()) {
             System.out.println(iterator.next());
         }
+    }
+
+    private File download(String remoteUrl, boolean isJson) throws Exception {
+        System.out.println("Downloading " + remoteUrl);
+        URL obj = new URL(remoteUrl);
+        HttpURLConnection conn = (HttpURLConnection) obj.openConnection();
+        conn.setReadTimeout(5000);
+
+        System.out.println("Request URL ... " + remoteUrl);
+
+        boolean redirect = false;
+
+        // normally, 3xx is redirect
+        int status = conn.getResponseCode();
+        if (status != HttpURLConnection.HTTP_OK) {
+            if (status == HttpURLConnection.HTTP_MOVED_TEMP
+                    || status == HttpURLConnection.HTTP_MOVED_PERM
+                    || status == HttpURLConnection.HTTP_SEE_OTHER) {
+                redirect = true;
+            }
+        }
+
+        URL url = new URL(remoteUrl);
+        String outputLocation = "output/" + url.getPath();
+
+        File output = new File(outputLocation);
+        output.getParentFile().mkdirs();
+
+        if (redirect) {
+
+            // get redirect url from "location" header field
+            String newUrl = conn.getHeaderField("Location");
+
+            // get the cookie if need, for login
+            String cookies = conn.getHeaderField("Set-Cookie");
+
+            // open the new connnection again
+            conn = (HttpURLConnection) new URL(newUrl).openConnection();
+
+            System.out.println("Redirect to URL : " + newUrl);
+
+        }
+        if (!isJson && output.exists()) {
+            System.out.println(output.getAbsolutePath() + " exists, skipping");
+            return null;
+        }
+
+        byte[] buffer = new byte[2048];
+
+        FileOutputStream baos = new FileOutputStream(output);
+        InputStream inputStream = conn.getInputStream();
+        int totalBytes = 0;
+        int read = inputStream.read(buffer);
+        while (read > 0) {
+            totalBytes += read;
+            baos.write(buffer, 0, read);
+            read = inputStream.read(buffer);
+        }
+        System.out.println("Retrieved " + totalBytes + "bytes");
+
+        return output;
     }
 }
