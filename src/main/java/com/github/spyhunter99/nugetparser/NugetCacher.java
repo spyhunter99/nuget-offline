@@ -49,7 +49,7 @@ public class NugetCacher {
             System.out.println("Example: java -jar NugetCacher-<VERSION>-jar jquery");
             System.out.println("Example: java -jar NugetCacher-<VERSION>-jar audit.wcf");
         } else {
-            new NugetCacher().run(args[0]);
+            new NugetCacher().run(args[0].toLowerCase());
         }
     }
     LinkedHashSet<String> packages = new LinkedHashSet<>();
@@ -64,9 +64,13 @@ public class NugetCacher {
         String seed = "https://api.nuget.org/v3/registration1-gz/" + url + "/index.json";
         jsons.add(seed);
 
+        Set<String> hosts = new HashSet<>();
+
         while (!jsons.isEmpty()) {
             if (jsons.iterator().hasNext()) {
                 String jsonUrl = jsons.iterator().next();
+                URL url2 = new URL(jsonUrl);
+                hosts.add(url2.getProtocol() + "://" + url2.getHost());
                 if (!urlsDownloadedThisSession.contains(jsonUrl)) {
                     downloadAndParse(jsonUrl);
                     urlsDownloadedThisSession.add(jsonUrl);
@@ -77,8 +81,24 @@ public class NugetCacher {
         System.out.println("Downloading packages " + packages.size());
         Iterator<String> iterator = packages.iterator();
         while (iterator.hasNext()) {
-            download(iterator.next(), false);
+            String uri = iterator.next();
+            URL uri2 = new URL(uri);
+            hosts.add(uri2.getProtocol() + "://" + uri2.getHost());
+            download(uri, false);
         }
+
+        //ok last step, output all hostnames that we've downloaded content from, you can then
+        //use this list for dns forwarding
+        System.out.println();
+        System.out.println();
+        System.out.println("Host list");
+        iterator = hosts.iterator();
+        while (iterator.hasNext()) {
+            String uri = iterator.next();
+
+            System.out.println(uri);
+        }
+
     }
 
     private void downloadAndParse(String url) throws Exception {
@@ -263,7 +283,7 @@ public class NugetCacher {
     }
 
     private File download(String remoteUrl, boolean isJson) throws Exception {
-        System.out.println("Downloading " + remoteUrl);
+        System.out.println("Downloading " + remoteUrl + " " + packages.size() + " remaining");
         URL obj = new URL(remoteUrl);
         HttpURLConnection conn = (HttpURLConnection) obj.openConnection();
         conn.setReadTimeout(5000);
